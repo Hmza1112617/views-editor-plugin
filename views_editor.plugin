@@ -1,0 +1,158 @@
+from base_plugin import BasePlugin, MenuItemData, MenuItemType, MethodHook
+from hook_utils import find_class
+from ui.settings import Header, Switch, Divider
+from ui.alert import AlertDialogBuilder
+from android_utils import run_on_ui_thread
+from java.lang import Integer
+# @DRR_R2
+from android.widget import EditText, LinearLayout
+from android.graphics import Color
+from client_utils import get_last_fragment
+
+__id__ = "vvvvvv"
+__name__ = "تعديل مشاهدات، محلي"
+__description__ = "دوس ع رسالة ضغطه مطوله و بعدها plugins ، وراها تعديل مشاهدات"
+__author__ = "@DRR_R2"
+__version__ = "2.0"
+__icon__ = "msg_views"
+__min_version__ = "11.12.0"
+
+class ST(BasePlugin):
+    def on_plugin_load(self):
+        try:
+            lc = find_class("org.telegram.messenger.LocaleController")
+            for m in lc.getClass().getDeclaredMethods():
+                if m.getName() == "formatShortNumber":
+                    self.hook_method(m, YY(self))
+            
+            mc = find_class("org.telegram.ui.Cells.ChatMessageCell")
+            for m in mc.getClass().getDeclaredMethods():
+                if m.getName() == "setMessageObject":
+                    self.hook_method(m, XX(self))
+
+            self.add_menu_item(MenuItemData(
+                menu_type=MenuItemType.MESSAGE_CONTEXT_MENU,
+                text="👁️ تعديل المشاهدات",
+                on_click=self.qq,
+                icon="msg_views"
+            ))
+        except: pass
+
+    def qq(self, params_map):
+        try:
+            # استخراج الرسالة الصحيحة من الـ HashMap او الكائن مباشرة
+            mo = params_map
+            try:
+                if "HashMap" in str(params_map.getClass().getName()):
+                    if params_map.containsKey("message"):
+                        mo = params_map.get("message")
+                    elif params_map.containsKey("msg"):
+                        mo = params_map.get("msg")
+            except: pass
+
+            la = get_last_fragment()
+            if not la: return
+            act = la.getParentActivity()
+            
+            # إعدادات الواجهة واللون الأصفر
+            et = EditText(act)
+            et.setHint("العدد الجديد...")
+            et.setTextColor(Color.parseColor("#FFFF00"))
+            et.setHintTextColor(Color.parseColor("#80FFFF00"))
+            
+            container = LinearLayout(act)
+            container.setOrientation(1)
+            container.setPadding(50, 20, 50, 20)
+            container.addView(et)
+            
+            db = AlertDialogBuilder(act)
+            db.set_title("تعديل المشاهدات")
+            db.set_view(container)
+            
+            def sv(b, w):
+                try:
+                    txt = et.getText().toString()
+                    
+                    # استخراج الآيدي بشكل آمن
+                    real_id = 0
+                    if hasattr(mo, "getId"):
+                        real_id = mo.getId()
+                    elif hasattr(mo, "id"):
+                        real_id = mo.id
+                    
+                    if txt and real_id != 0:
+                        num = int(txt)
+                        # 1. حفظ القيمة في الإعدادات
+                        self.set_setting(f"v_{real_id}", str(num))
+                        
+                        # 2. حقن القيمة مباشرة في الكائن الحالي لتحديث فوري
+                        updated = False
+                        if hasattr(mo, "messageOwner") and mo.messageOwner:
+                            mo.messageOwner.views = num
+                            mo.messageOwner.flags |= 1024
+                            updated = True
+                        
+                        if not updated and hasattr(mo, "views"):
+                            mo.views = num
+                            mo.flags |= 1024
+                        
+                        # 3. تحديث الواجهة
+                        run_on_ui_thread(lambda: self.safe_refresh(la))
+                except: pass
+                b.dismiss()
+
+            db.set_positive_button("حفظ", sv)
+            db.set_negative_button("إلغاء", lambda b, w: b.dismiss())
+            db.show()
+        except: pass
+
+    def safe_refresh(self, fragment):
+        try:
+            if hasattr(fragment, "getChatListView"):
+                lv = fragment.getChatListView()
+                if lv: lv.invalidateViews()
+        except: pass
+
+    def create_settings(self):
+        return [
+            Header(text="إعدادات ST Views"),
+            Switch(key="no_short", text="منع اختصار الأرقام (K/M)", default=True),
+            Divider(),
+            # @DRR_R2
+            Header(text="الحقوق: @DRR_R2 & @phpandpy")
+        ]
+
+class XX(MethodHook):
+    def __init__(self, p):
+        self.p = p
+    def before_hooked_method(self, param):
+        try:
+            mo = param.args[0]
+            if mo:
+                m_id = 0
+                if hasattr(mo, "getId"): m_id = mo.getId()
+                elif hasattr(mo, "id"): m_id = mo.id
+                
+                if m_id != 0:
+                    sv = self.p.get_setting(f"v_{m_id}", None)
+                    if sv is not None:
+                        val = int(sv)
+                        # @phpandpy
+                        if hasattr(mo, "messageOwner") and mo.messageOwner:
+                            mo.messageOwner.views = val
+                            mo.messageOwner.flags |= 1024
+                        elif hasattr(mo, "views"):
+                             mo.views = val
+                             mo.flags |= 1024
+        except: pass
+
+class YY(MethodHook):
+    def __init__(self, p):
+        self.p = p
+    # @DRR_R2
+    def after_hooked_method(self, param):
+        if self.p.get_setting("no_short", True):
+            try:
+                num = int(param.args[0])
+                if num > 0: param.setResult(str(num))
+            except: pass
